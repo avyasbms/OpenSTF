@@ -1,0 +1,53 @@
+version: '2'
+
+volumes:
+  rethinkdb:
+  storage-temp:
+
+services:
+  nginx:
+    build: nginx/
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+    restart: unless-stopped
+    ports:
+      - 80:80
+    depends_on:
+      - app
+  adb:
+    image: sorccu/adb:latest
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+  rethinkdb:
+    image: rethinkdb:2.3
+    restart: unless-stopped
+    volumes:
+      - rethinkdb:/data
+  app:
+    image: openstf/stf:latest
+    restart: unless-stopped
+    environment:
+      - RETHINKDB_PORT_28015_TCP
+      - SECRET
+    volumes:
+      - storage-temp:/app/data
+    command: stf app --auth-url http://${PUBLIC_IP}/auth/mock/ --websocket-url ws://${PUBLIC_IP}/ --port 3000
+    command: stf auth-mock --app-url http://${PUBLIC_IP}/ --port 3000
+    command: stf processor --connect-app-dealer tcp://triproxy:7160 --connect-dev-dealer tcp://dev-triproxy:7260
+    command: stf triproxy app --bind-pub "tcp://*:7150" --bind-dealer "tcp://*:7160" --bind-pull "tcp://*:7170"	
+    command: stf triproxy dev --bind-pub "tcp://*:7250" --bind-dealer "tcp://*:7260" --bind-pull "tcp://*:7270"
+    command: stf migrate		
+    command: stf provider --name ${STATION_NAME} --connect-sub tcp://dev-triproxy:7250 --connect-push tcp://dev-triproxy:7270 --storage-url http://${PUBLIC_IP}/ --public-ip ${PUBLIC_IP} --heartbeat-interval 10000 --screen-ws-url-pattern "ws://${PUBLIC_IP}/d/nuc/<%= serial %>/<%= publicPort %>/" --adb-host adb --min-port 7400 --max-port 7700	
+    command: stf reaper dev --connect-push tcp://dev-triproxy:7270 --connect-sub tcp://triproxy:7150 --heartbeat-timeout 30000
+    command: stf storage-plugin-apk --port 3000 --storage-url http://${PUBLIC_IP}/
+    command: stf storage-plugin-image --port 3000 --storage-url http://${PUBLIC_IP}/
+    command: stf storage-temp --port 3000 --save-dir /app/data
+    command: stf websocket --port 3000 --storage-url http://${PUBLIC_IP}/ --connect-sub tcp://triproxy:7150 --connect-push tcp://triproxy:7170	
+    command: stf api --port 3000 --connect-sub tcp://triproxy:7150 --connect-push tcp://triproxy:7170
+    ports:
+      - 7400-7700:7400-7700   
+    depends_on:
+      - rethinkdb
+      - adb   
